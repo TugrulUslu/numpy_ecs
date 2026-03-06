@@ -530,8 +530,8 @@ class ECS:
         sel = self._select_entities(sys)
         eids, mask = sel.eids, sel.sel
 
-        # Diff tracking for on_add/on_remove (works for both immediate and deferred modes).
-        if sys.on_add is not None or sys.on_remove is not None:
+        # Diff tracking for on_add/on_remove (skips if immediate events is True).
+        if not self.immediate_events and (sys.on_add is not None or sys.on_remove is not None):
             if sys._prev_sel is None:
                 sys._prev_sel = np.zeros(self._cap, dtype=np.bool_)
 
