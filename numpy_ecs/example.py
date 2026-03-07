@@ -2,7 +2,7 @@ from numpy.typing import NDArray
 from typing import Any
 
 import numpy as np
-from numpy_ecs import ECS
+from ecs import ECS
 
 ecs = ECS(initial_capacity=4096)
 

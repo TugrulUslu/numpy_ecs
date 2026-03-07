@@ -236,21 +236,6 @@ ecs.define_system(
 )
 ```
 
-There are two delivery modes, controlled by `ecs.immediate_events` (default `True`):
-
-| Mode | When events fire |
-|---|---|
-| `immediate_events = True` | Immediately inside `add()`, `remove()`, `destroy()` |
-| `immediate_events = False` | Deferred — diffed and fired during `run_system()` |
-
-Immediate mode means `on_add` fires with fully initialised component data
-(constructor has already run). Deferred mode fires events once per frame at
-the start of each system's run, which avoids any mid-iteration surprises.
-
-Note that removing a component that was **excluded** by a system causes
-`on_add` to fire (the entity just entered the system's set), and adding an
-excluded component causes `on_remove` to fire.
-
 ---
 
 ## Capacity and Growth
@@ -272,11 +257,6 @@ so at most 64 distinct component types can be registered per ECS instance.
 
 **No stale-handle detection.** Entity IDs are plain integers. Accessing a
 destroyed (and potentially recycled) entity ID is not caught at runtime.
-
-**No command buffer.** Calling `add`, `remove`, or `destroy` from inside a
-system callback is legal but mutates the arrays while they are being iterated.
-Use `immediate_events = False` and defer mutations until after the system run
-if this is a concern.
 
 **Numeric components only.** Component data must be expressible as a NumPy
 dtype. Arbitrary Python objects, variable-length data, and inter-entity
@@ -309,7 +289,6 @@ references are not supported.
 
 | Attribute | Type | Description |
 |---|---|---|
-| `immediate_events` | `bool` | Toggle immediate vs. deferred membership events |
 | `entity_active` | `BoolArray` | True for every live entity |
 | `entity_ready` | `BoolArray` | True for every entity that can receive components |
 | `entity_masks` | `NDArray[uint64]` | Component bitmask per entity |

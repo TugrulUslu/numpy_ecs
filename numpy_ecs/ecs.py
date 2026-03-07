@@ -73,11 +73,7 @@ class ECS:
     - Each entity has a uint64 bitmask 'entity_masks[eid]' of owned components (max 64).
     - Systems define 'require' and 'exclude' sets; matching is done via bit tests.
     - Systems can be grouped by a 'category_mask' and run conditionally.
-    - 'on_add'/'on_remove' events:
-        * If 'immediate_events=True' (default), they are emitted **immediately** by
-          'add(...)', 'remove(...)', and 'destroy(...)', and '_prev_sel' is kept in sync.
-        * If 'immediate_events=False', events are emitted **only** during 'run_system(...)'
-          by diffing current selection against '_prev_sel'.
+    - 'on_add'/'on_remove' events are emitted **only** during 'run_system(...)' by diffing current selection against '_prev_sel'.
     """
 
     # ---------------------------
@@ -103,9 +99,6 @@ class ECS:
         self._cap: int = int(initial_capacity)
         self._next_entity: int = 0
         self._free_list: list[int] = []
-
-        # Public toggle for immediate vs. deferred system events
-        self.immediate_events: bool = True
 
         # Entity bookkeeping
         self.entity_active: BoolArray = np.zeros(self._cap, dtype=np.bool_)
@@ -233,27 +226,20 @@ class ECS:
 
         Behavior
         --------
-        If 'immediate_events=True':
-          - Any system where the entity is currently matched receives 'on_remove([eid])'.
-          - '_prev_sel[eid]' is cleared for all systems (kept in sync).
-        If 'immediate_events=False':
-          - No immediate callbacks; '_prev_sel' is left as-is so the next 'run_system'
-            emits the removal diffs.
-        Component destructors then run; the entity ID is recycled.
+        - The next 'run_system' emits the removal diffs. Component destructors then run; the entity ID is recycled.
         """
         if not self.entity_active[eid]:
             return
 
         mask = self.entity_masks[eid]
 
-        # Immediate removals for systems (if enabled)
-        if self.immediate_events:
-            for sys in self._systems:
-                matched = self._matches_mask(sys, mask)
-                if matched and sys.on_remove is not None:
+        # Fire on_remove immediately for any system this entity matched,
+        # then clear _prev_sel so a recycled ID starts fresh.
+        for sys in self._systems:
+            if sys._prev_sel is not None and eid < sys._prev_sel.shape[0]:
+                if sys._prev_sel[eid] and sys.on_remove is not None:
                     sys.on_remove(self, np.array([eid], dtype=np.int64), sys.udata)
-                if sys._prev_sel is not None:
-                    sys._prev_sel[eid] = False
+                sys._prev_sel[eid] = False
 
         # Call component destructors
         if mask != 0:
@@ -287,8 +273,6 @@ class ECS:
         so structured dtypes can be initialized in place, e.g. 'view['x'][0] = 1.0'.
         - If the constructor raises, the mask bit and slot are **rolled back** and the
         exception is re-raised (no partial state).
-        - 'on_add'/'on_remove' are fired **after** the constructor if 'immediate_events=True',
-        and '_prev_sel[eid]' is kept in sync.
 
         Parameters
         ----------
@@ -336,21 +320,6 @@ class ECS:
             self.entity_masks[eid] = mask_before
             raise
 
-        # Immediate event notifications and prev_sel sync (optional)
-        if self.immediate_events:
-            for sys in self._systems:
-                before = self._matches_mask(sys, mask_before)
-                after = self._matches_mask(sys, mask_after)
-
-                if not before and after and sys.on_add is not None:
-                    sys.on_add(self, np.array([eid], dtype=np.int64), sys.udata)
-                elif before and not after and sys.on_remove is not None:
-                    # This can happen if adding this component causes exclusion in a system
-                    sys.on_remove(self, np.array([eid], dtype=np.int64), sys.udata)
-
-                if sys._prev_sel is not None:
-                    sys._prev_sel[eid] = after
-
         return comp_view_writable
 
     def get(self, eid: EntityId, comp_id: CompId, *, writable: bool = False) -> Any:
@@ -380,12 +349,7 @@ class ECS:
         Behavior
         --------
         - Calls the component's destructor (if any).
-        - If 'immediate_events=True', emits **immediate** system events and keeps
-          '_prev_sel[eid]' in sync:
-            * If membership changes True -> False: 'on_remove([eid])'
-            * If membership changes False -> True (e.g., removing an *excluded* comp): 'on_add([eid])'
-        - If 'immediate_events=False', no events are fired here; 'run_system' diffs will
-          detect and emit events next frame.
+        - No events are fired here; 'run_system' diffs will detect and emit events next frame.
         """
         bit = self._comp_bit(comp_id)
         if not (self.entity_masks[eid] & bit):
@@ -394,19 +358,6 @@ class ECS:
         # Membership before/after
         mask_before = self.entity_masks[eid]
         mask_after = mask_before & ~bit
-
-        if self.immediate_events:
-            for sys in self._systems:
-                before = self._matches_mask(sys, mask_before)
-                after = self._matches_mask(sys, mask_after)
-
-                if before and not after and sys.on_remove is not None:
-                    sys.on_remove(self, np.array([eid], dtype=np.int64), sys.udata)
-                elif not before and after and sys.on_add is not None:
-                    sys.on_add(self, np.array([eid], dtype=np.int64), sys.udata)
-
-                if sys._prev_sel is not None:
-                    sys._prev_sel[eid] = after
 
         # Destroy data then clear mask bit
         comp_def = self._components[comp_id]
@@ -530,8 +481,8 @@ class ECS:
         sel = self._select_entities(sys)
         eids, mask = sel.eids, sel.sel
 
-        # Diff tracking for on_add/on_remove (skips if immediate events is True).
-        if not self.immediate_events and (sys.on_add is not None or sys.on_remove is not None):
+        # Diff tracking for on_add/on_remove
+        if sys.on_add is not None or sys.on_remove is not None:
             if sys._prev_sel is None:
                 sys._prev_sel = np.zeros(self._cap, dtype=np.bool_)
 
